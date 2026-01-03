@@ -5,7 +5,7 @@ export class PlayerStats {
         this.level = 1;
         this.exp = 0;
         this.nextLevelExp = 100;
-
+        this.pendingUpgradeCount = 0; // 存摺：紀錄待領取的升級次數
         // --- 戰鬥屬性 (可以動態增加) ---
         this.maxHp = 100;
         this.hp = 100;
@@ -29,18 +29,14 @@ export class PlayerStats {
         this.bounceRange = 300;
     }
 
-    // 處理經驗值增加
     gainExp(amount) {
         this.exp += amount;
-        let didLevelUp = false;
-
-        // 使用 while 處理連升多級的情況
         while (this.exp >= this.nextLevelExp) {
-            if (this.levelUp()) {
-                didLevelUp = true;
-            }
+            this.exp -= this.nextLevelExp;
+            this.level++;
+            this.pendingUpgradeCount++; // 必須增加這個變數
+            this.nextLevelExp = Math.floor(this.nextLevelExp * 1.2);
         }
-        return didLevelUp; // 最終告訴 Engine 是否有升級發生
     }
 
     levelUp() {

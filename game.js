@@ -129,7 +129,12 @@ class GameEngine {
 
         if (this.isGameOver) return;
         if (this.isSelectingUpgrade) return; // 如果正在選技能，停止所有更新
-
+        // --- 新增：檢查升級存摺 ---
+        if (this.stats.pendingUpgradeCount > 0) {
+            this.stats.pendingUpgradeCount--; // 消耗一次升級機會
+            this.showUpgradeMenu();           // 彈出選單
+            return; // 這一幀暫停，等待玩家選擇
+        }
         // 如果凍結計時器大於 0，減少計時器並跳過後續的物理與移動邏輯
         if (this.freezeTimer > 0) {
             this.freezeTimer--;
@@ -224,6 +229,14 @@ class GameEngine {
                 CombatLogic.handleExplosion(this, bullet.x, bullet.y, this.stats.explosionRadius, bullet);
             }
 
+
+             // 3. 基礎傷害處理 (如果沒彈跳)
+            enemy.takeDamage(this.stats.damage);
+            if (enemy.hp <= 0) {
+                this.handleEnemyDeath(enemy, bullet);
+            } else {
+                EffectManager.createHitEffect(this.particles, bullet.x, bullet.y);
+            }
             // 2. 處理彈跳
             if (this.stats.bounceLevel > 0 && bullet.bounceCount > 0) {
                 const didBounce = CombatLogic.handleBounce(this, bullet, enemy);
@@ -234,13 +247,7 @@ class GameEngine {
                 }
             }
 
-            // 3. 基礎傷害處理 (如果沒彈跳)
-            enemy.takeDamage(this.stats.damage);
-            if (enemy.hp <= 0) {
-                this.handleEnemyDeath(enemy, bullet);
-            } else {
-                EffectManager.createHitEffect(this.particles, bullet.x, bullet.y);
-            }
+           
 
             // 4. 處理穿透
             bullet.pierce--;
@@ -378,19 +385,33 @@ class GameEngine {
         return selections;
     }
 
-    // GameEngine.js 內的 showUpgradeMenu 修正
     showUpgradeMenu() {
         this.isSelectingUpgrade = true;
 
-        // 直接呼叫你寫好的 getRandomUpgrades(count)
-        // 它已經包含了：1. Condition 過濾, 2. 權重計算, 3. 不重複抽取
-        this.upgradeOptions = this.getRandomUpgrades(3);
+        // 1. 取得原始隨機選項 (getRandomUpgrades 內已有 condition 過濾)
+        let options = this.getRandomUpgrades(3);
 
-        // 防呆檢查：如果池子太空抽不出東西
-        if (this.upgradeOptions.length === 0) {
-            console.warn("警告：升級池中沒有符合條件的技能！");
-            this.isSelectingUpgrade = false;
+        // 2. 保底邏輯：玩家完全沒有武器模組時觸發
+        const hasModule = this.stats.explosionLevel > 0 || this.stats.bounceLevel > 0;
+
+        if (!hasModule) {
+            // 從池子裡篩選符合標籤「且」符合條件的武器
+            const weaponModules = UPGRADE_POOL.filter(u => {
+                const isWeapon = (u.tag === "Explosion" || u.tag === "Bounce");
+                const passCondition = typeof u.condition === 'function' ? u.condition(this.stats) : true;
+                return isWeapon && passCondition;
+            });
+
+            // 如果目前的選項裡剛好都沒抽到武器，且池子裡還有可用武器
+            const alreadyHasWeapon = options.some(opt => opt.tag === "Explosion" || opt.tag === "Bounce");
+
+            if (!alreadyHasWeapon && weaponModules.length > 0) {
+                // 強行把第一個選項換成符合條件的武器
+                options[0] = weaponModules[Math.floor(Math.random() * weaponModules.length)];
+            }
         }
+
+        this.upgradeOptions = options;
     }
     applyUpgrade(index) {
         const selected = this.upgradeOptions[index];
@@ -438,9 +459,7 @@ class GameEngine {
         } else {
             // 普通怪獎勵
             this.score += 10;
-            if (this.stats.gainExp(20)) {
-                this.showUpgradeMenu();
-            }
+            this.stats.gainExp(20);
         }
     }
     // game.js 內部修改
@@ -470,21 +489,3 @@ class GameEngine {
 
 new GameEngine();
 
-class SimpleExplosion {
-    constructor(x, y, radius) {
-        this.x = x;
-        this.y = y;
-        this.radius = radius;
-        this.life = 1.0; // 生命值從 1.0 降到 0
-    }
-    update() {
-        this.life -= 0.05; // 消失速度
-    }
-    draw(ctx) {
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius * (1 - this.life * 0.5), 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255, 100, 0, ${this.life})`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-    }
-}
