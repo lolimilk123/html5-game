@@ -5,13 +5,23 @@ import { PhysicsSystem } from './PhysicsSystem.js';
 import { Particle } from './Particle.js'; // <--- 檢查有沒有這一行！
 import { CameraSystem } from './CameraSystem.js';
 import { PlayerStats } from './PlayerStats.js';
+import { UPGRADE_POOL } from './Upgrades.js';
+import { UIManager } from './UIManager.js';
+import { ExplosionVisual } from './ExplosionVisual.js';
+import { EffectManager } from './EffectManager.js';
+import { CombatLogic } from './CombatLogic.js';
+import { ChaserEnemy } from './ChaserEnemy.js';
+import { ShooterEnemy } from './ShooterEnemy.js';
+import { TankEnemy } from './TankEnemy.js'; //
+import { EnemyManager } from './EnemyManager.js';
+
 class GameEngine {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
         this.player = new Player(400, 300);
         this.bullets = [];
-        this.enemies = [];
+        // this.enemies = [];
         this.input = { up: false, down: false, left: false, right: false };
         this.mouse = { x: 0, y: 0, isDown: false };
         this.fireTimer = 0;
@@ -19,10 +29,20 @@ class GameEngine {
         this.score = 0; // <--- 補上這行
         this.camera = new CameraSystem();
         this.stats = new PlayerStats(); // 建立屬性管理器
+        this.uiManager = new UIManager(this.ctx);
         this.freezeTimer = 0; // 控制畫面凍結的剩餘幀數
+        this.isSelectingUpgrade = false; //判斷是否在升級選單
+        this.upgradeOptions = [];
+        this.enemyBullets = []; // <--- 務必補上這行，否則 ShooterEnemy 會報錯
+        this.enemyManager = new EnemyManager(this);
+        this.isGameOver = false;
         this.init();
+
     }
     init() {
+
+
+
         window.onkeydown = e => {
             const key = e.key.toLowerCase();
             if (key === 'w') this.input.up = true;
@@ -30,30 +50,23 @@ class GameEngine {
             if (key === 'a') this.input.left = true;
             if (key === 'd') this.input.right = true;
 
-            // 按下數字鍵 1：變成機關槍模式
-            if (key === '1') {
-                this.stats.fireRate = 5;
-                this.stats.pierceCount = 1;
-                this.stats.bulletCount = 1;
-                console.log("切換至：極速模式");
-                this.testMode="機關槍";
-            }
 
-            // 按下數字鍵 2：變成貫穿模式
-            if (key === '2') {
-                this.stats.fireRate = 15;
-                this.stats.pierceCount = 20;
-                  this.stats.bulletCount = 1;
-                console.log("切換至：貫穿模式");
-                this.testMode="貫穿";
+            if (key === '1') {
+                this.stats.explosionLevel = 1;     // 開啟爆炸功能
+                this.stats.explosionRadius = 100;   // 給一個超大範圍方便肉眼觀察
+                this.stats.fireRate = 10;           // 射速稍微調快
+                console.log("測試模式：開啟大範圍爆炸彈");
+                this.testMode = "爆炸測試";
             }
-            // 按下數字鍵 3：變成雙彈道模式
-            if (key === '3') {
-                this.stats.fireRate = 5;
-                this.stats.pierceCount = 1;
-                  this.stats.bulletCount = 2;
-                console.log("切換至：雙彈道模式");
-                this.testMode="雙彈道";
+            // GameEngine.js 中的 init() window.onkeydown 內
+            if (key === '2') {
+                this.stats.bounceLevel = 1;      // 開啟彈射等級
+                this.stats.bounceCount = 3;      // 設定單發子彈可彈射 3 次
+                this.stats.pierceCount = 1;      // 彈射通常搭配低貫穿，測試彈射路徑
+                this.stats.fireRate = 20;        // 射速放慢一點點，方便觀察子彈飛向誰
+                this.stats.bulletCount = 1;      // 單發比較好觀察路徑
+                console.log("測試模式：開啟多重彈射彈 (3次)");
+                this.testMode = "彈射測試";
             }
         };
 
@@ -65,22 +78,58 @@ class GameEngine {
             if (key === 'd') this.input.right = false;
         };
 
-        this.canvas.onmousedown = () => this.mouse.isDown = true;
+        //滑鼠按下監聽
+        this.canvas.onmousedown = (e) => {
+
+            if (this.isGameOver) {
+                location.reload();
+                return;
+            }
+            if (this.isSelectingUpgrade) {
+                if (this.uiManager.hoverIndex !== -1) {
+                    this.applyUpgrade(this.uiManager.hoverIndex);
+                }
+            } else {
+                this.mouse.isDown = true;
+            }
+        };
+
+        //滑鼠放開監聽
         window.onmouseup = () => this.mouse.isDown = false;
+
+
+        //滑鼠移動監聽
         this.canvas.onmousemove = e => {
             const r = this.canvas.getBoundingClientRect();
             this.mouse.x = e.clientX - r.left;
             this.mouse.y = e.clientY - r.top;
+
+            // 如果正在選技能，進行碰撞檢查
+            if (this.isSelectingUpgrade) {
+                const cardW = 480; // 需與 UIManager 寬度一致
+                const cardH = 100;
+                const cardX = 400 - cardW / 2;
+
+                let found = -1;
+                for (let i = 0; i < 3; i++) {
+                    const cardY = 170 + i * 125; // 需與 UIManager 座標一致
+                    if (this.mouse.x >= cardX && this.mouse.x <= cardX + cardW &&
+                        this.mouse.y >= cardY && this.mouse.y <= cardY + cardH) {
+                        found = i;
+                        break;
+                    }
+                }
+                this.uiManager.hoverIndex = found; // 更新 UIManager 的狀態
+            }
         };
-        // --- 測試專用：大幅提升射速 ---
-        // 原本是 10 (每 10 幀射一發)，改為 2 (每 2 幀一發，接近機關槍)
-        //  this.stats.fireRate = 2;
-        // 讓一發子彈可以穿透 10 個敵人
-        this.stats.pierceCount = 10;
         this.loop();
     }
 
     update() {
+
+        if (this.isGameOver) return;
+        if (this.isSelectingUpgrade) return; // 如果正在選技能，停止所有更新
+
         // 如果凍結計時器大於 0，減少計時器並跳過後續的物理與移動邏輯
         if (this.freezeTimer > 0) {
             this.freezeTimer--;
@@ -92,13 +141,22 @@ class GameEngine {
         this.player.speed = this.stats.moveSpeed;
         this.player.update(this.input);
 
+        // 2. --- 強制邊界限制 ---
+        // 限制 X 軸 (0 ~ 畫布寬度減去角色寬度)
+        this.player.x = Math.max(0, Math.min(this.player.x, this.canvas.width - this.player.w));
+
+        // 限制 Y 軸 (0 ~ 畫布高度減去角色高度)
+        this.player.y = Math.max(0, Math.min(this.player.y, this.canvas.height - this.player.h));
+
+
+
         // 射擊邏輯
         if (this.mouse.isDown && this.fireTimer <= 0) {
             const count = this.stats.bulletCount;
             const spread = this.stats.spreadAngle;
 
             // 1. 計算玩家到滑鼠的基礎角度
-            const baseAngle = Math.atan2(this.mouse.y - (this.player.y + 16), this.mouse.x - (this.player.x + 16));
+            const baseAngle = Math.atan2(this.mouse.y - (this.player.centerY), this.mouse.x - (this.player.centerX));
 
             // 2. 根據子彈數量進行扇形發射
             for (let i = 0; i < count; i++) {
@@ -109,15 +167,17 @@ class GameEngine {
                 const finalAngle = baseAngle + angleOffset;
 
                 // 3. 計算目標點 (利用極座標轉成目標 X, Y 傳給 Bullet)
-                const tx = (this.player.x + 16) + Math.cos(finalAngle) * 100;
-                const ty = (this.player.y + 16) + Math.sin(finalAngle) * 100;
+                const tx = (this.player.centerX) + Math.cos(finalAngle) * 100;
+                const ty = (this.player.centerY) + Math.sin(finalAngle) * 100;
 
+                // GameEngine.js 中的 update() 射擊部分
                 this.bullets.push(new Bullet(
-                    this.player.x + 16,
-                    this.player.y + 16,
+                    this.player.centerX,
+                    this.player.centerY,
                     tx,
                     ty,
-                    this.stats.pierceCount
+                    this.stats.pierceCount,
+                    this.stats.bounceCount // <--- 傳入當前等級的彈跳次數
                 ));
             }
 
@@ -125,103 +185,306 @@ class GameEngine {
         }
         if (this.fireTimer > 0) this.fireTimer--;
 
-        // 3. 生成敵人
-        if (Math.random() < 0.05) {
-            this.enemies.push(new Enemy(Math.random() * 800, -30));
-        }
 
-        // 4. 更新所有物件位置 (類似 Unity 的 Update)
+        this.enemyManager.update(this.player.centerX, this.player.centerY);
+
+        // 4. 更新所有物件位置
         this.bullets.forEach(b => b.update());
-        this.enemies.forEach(e => e.update(this.player.x, this.player.y));
 
-        // 5. 統一處理碰撞偵測 (類似 Unity 的 LateUpdate 或物理運算階段)
-        PhysicsSystem.updateCollisions(this.bullets, this.enemies, (bullet, enemy, bIdx, eIdx) => {
-            // 1. 如果敵人已經死了或子彈已經失效，跳過
-            if (enemy.isDead || bullet.lifeTime <= 0) return;
-            // 2. 敵人受傷並觸發死亡/擊中效果
-            this.camera.shake(5, 10);
 
-            enemy.takeDamage(1);
+        // 新增：處理敵人子彈的移動與碰撞
+        this.enemyBullets = this.enemyBullets.filter(eb => {
+            eb.x += eb.vx;
+            eb.y += eb.vy;
 
-            if (bullet.pierce !== undefined) {
-                bullet.pierce--;
-                if (bullet.pierce <= 0) bullet.lifeTime = 0;
-            } else {
-                bullet.lifeTime = 0; // 防止舊版 Bullet 沒設定 pierce 導致卡死
+            // 檢查與玩家碰撞
+            const dist = Math.sqrt((eb.x - (this.player.centerX)) ** 2 + (eb.y - (this.player.centerY)) ** 2);
+            if (dist < 20) {
+                this.handlePlayerDamage(eb.damage || 5);
+                return false;
             }
-            if (enemy.hp > 0) {
-                // --- 效果 A: 僅擊中 (輕微震動 + 少許小粒子) ---
-                this.camera.shake(3, 5); // 震動強度 3, 持續 5 幀
-
-                for (let i = 0; i < 3; i++) {
-                    // 噴出細小的紅色火花
-                    this.particles.push(new Particle(bullet.x, bullet.y, "#FF4444", 2, 4));
-                }
-
-            } else {
-                // --- 效果 B: 擊殺 (強烈震動 + 大量大粒子噴發) ---
-                this.camera.shake(8, 5); // 震動強度 8, 持續 10 幀
-
-                for (let i = 0; i < 15; i++) {
-                    // 噴出較大、噴射速度較快的鮮紅碎片
-                    this.particles.push(new Particle(enemy.x + 16, enemy.y + 16, "#FF0000", 5, 10));
-                }
-                // 設定凍結 3~5 幀即可（約 0.05~0.08 秒），這在視覺上非常強烈了
-                this.freezeTimer = 1;
-                enemy.die(bullet.dx, bullet.dy);    //敵人死亡
-                this.stats.gainExp(20); // 增加經驗值
-                this.score += 10;
-            }
+            // 超出螢幕回收
+            return eb.x > -50 && eb.x < 850 && eb.y > -50 && eb.y < 650;
         });
 
-        // 6. 回收過期物件 (垃圾回收)
+        // game.js 內的 PhysicsSystem.updateCollisions 區塊
+
+        PhysicsSystem.updateCollisions(this.bullets, this.enemyManager.enemies, (bullet, enemy) => {
+            if (enemy.isDead || bullet.lifeTime <= 0) return;
+
+            // --- 關鍵修正 1：檢查命中紀錄 ---
+            if (!bullet.hitHistory) bullet.hitHistory = new Set();
+            if (bullet.hitHistory.has(enemy)) return; // 如果這顆子彈撞過這隻怪，直接跳過
+
+            // --- 關鍵修正 2：立即加入紀錄 ---
+            bullet.hitHistory.add(enemy);
+
+            // 1. 觸發爆炸 (現在因為有 hitHistory 擋住，同一隻怪只會炸一次)
+            if (this.stats.explosionLevel > 0) {
+                CombatLogic.handleExplosion(this, bullet.x, bullet.y, this.stats.explosionRadius, bullet);
+            }
+
+            // 2. 處理彈跳
+            if (this.stats.bounceLevel > 0 && bullet.bounceCount > 0) {
+                const didBounce = CombatLogic.handleBounce(this, bullet, enemy);
+                if (didBounce) {
+                    bullet.bounceCount--;
+                    // 彈跳成功後，不執行穿透扣除，直接 return 讓子彈飛往新方向
+                    return;
+                }
+            }
+
+            // 3. 基礎傷害處理 (如果沒彈跳)
+            enemy.takeDamage(this.stats.damage);
+            if (enemy.hp <= 0) {
+                this.handleEnemyDeath(enemy, bullet);
+            } else {
+                EffectManager.createHitEffect(this.particles, bullet.x, bullet.y);
+            }
+
+            // 4. 處理穿透
+            bullet.pierce--;
+            if (bullet.pierce <= 0) bullet.lifeTime = 0;
+        });
+
+        // 確保傳入的是 enemyManager 裡的敵人陣列
+        PhysicsSystem.checkPlayerEnemyCollisions(this.player, this.enemyManager.enemies, this);
+
+
+
+
+        // GameEngine.js 內的 update() 第 6 點
+        // 6. 回收過期物件
         this.bullets = this.bullets.filter(b => b.lifeTime > 0);
-        // 別忘了在 update 裡更新粒子並回收
-        this.particles.forEach(p => p.update());
-        this.particles = this.particles.filter(p => p.alpha > 0); // 改成 alpha
-        // --- 修正：根據 alpha 回收敵人 (確保能看到飛走消失的過程) ---
-        this.enemies = this.enemies.filter(e => e.alpha > 0);
+
+        // 粒子更新與過濾邏輯優化
+        this.particles = this.particles.filter(p => {
+            const isStillActive = p.update();
+
+            // 如果是舊的 Particle 類別，可能沒有回傳值，我們用 alpha 補強判斷
+            if (isStillActive === undefined) {
+                return p.alpha > 0;
+            }
+            return isStillActive;
+        });
+
+        EffectManager.updateOverlay(); // 讓特效自行處理冷卻
+
 
     }
 
 
 
     draw() {
-        // 1. 套用鏡頭效果 (就像 Unity Camera 的 Render 過程)
-        this.camera.apply(this.ctx);
-        this.ctx.fillStyle = "black";
-        this.ctx.fillRect(0, 0, 800, 600);
-        // 先畫屍體 (背景層)
-        this.enemies.filter(e => e.isDead).forEach(e => e.draw(this.ctx));
+        // A. 徹底清空畫布（防止殘影）
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // 再畫玩家、活怪和子彈
+        this.camera.apply(this.ctx);
+
+        // 背景
+        this.ctx.fillStyle = "black";
+        this.ctx.fillRect(-50, -50, this.canvas.width + 100, this.canvas.height + 100);
+
+        // 1. 玩家
         this.player.draw(this.ctx);
-        this.enemies.filter(e => !e.isDead).forEach(e => e.draw(this.ctx));
+
+        // 2. 子彈
         this.bullets.forEach(b => b.draw(this.ctx));
+
+        // 3. 敵人 (管理員會處理活著與死亡的順序)
+        this.enemyManager.draw(this.ctx);
+
+        // 4. 粒子與其他
         this.particles.forEach(p => p.draw(this.ctx));
 
+        // 敵人子彈
+        this.enemyBullets.forEach(eb => {
+            this.ctx.fillStyle = "#FF00FF";
+            this.ctx.beginPath();
+            this.ctx.arc(eb.x, eb.y, 4, 0, Math.PI * 2);
+            this.ctx.fill();
+        });
+
+        // E. 恢復鏡頭（結束震動影響）
         this.camera.restore(this.ctx);
-        // 注意：UI 通常不放在 camera.apply 之後，這樣 UI 才不會跟著震動
-        this.drawUI();
 
+        EffectManager.drawOverlay(this.ctx, this.canvas);
+
+
+        this.uiManager.drawWarning(this.ctx); // 繪製文字提示
+
+        // F. 繪製 UI（UI 不應受震動影響）
+        this.drawHUD();
+
+        // 如果遊戲結束，最後畫出死亡 UI
+        if (this.isGameOver) {
+            this.uiManager.drawGameOver(this.score);
+        }
     }
-    drawUI() {
-        this.ctx.fillStyle = "white";
-        this.ctx.font = "16px Arial";
-        this.ctx.fillText(`Bullets: ${this.bullets.length}`, 10, 20);
-        this.ctx.fillText(`Particles: ${this.particles.length}`, 10, 40);
-        this.ctx.fillText(`Score: ${this.score}`, 10, 60);
-        // UI 顯示直接對應 stats
-        this.ctx.fillText(`LV: ${this.stats.level}`, 10, 80);
-        this.ctx.fillText(`EXP: ${this.stats.exp}/${this.stats.nextLevelExp}`, 10, 100);
-        this.ctx.fillText(`HP: ${this.stats.hp}/${this.stats.maxHp}`, 10, 120);
+    drawHUD() {
 
-        this.ctx.fillText(`TestMode: ${this.testMode}`, 10, 140);
+        // 無論何時都畫 HUD
+        this.uiManager.drawHUD(this.stats, this.score, this.bullets.length, this.enemyManager.difficulty);
+
+
+        // 只有升級時才畫選單
+        if (this.isSelectingUpgrade) {
+            this.uiManager.drawUpgradeMenu(this.upgradeOptions, this.stats);
+        }
+
     }
     loop() {
         this.update(); this.draw();
         requestAnimationFrame(() => this.loop());
     }
+    getRandomUpgrades(count = 3) {
+        // 1. 先根據目前玩家狀態過濾掉不符合 condition 的技能
+        const availablePool = UPGRADE_POOL.filter(upgrade => {
+            // 如果 upgrade 有定義 condition，執行它；否則預設為 true
+            if (typeof upgrade.condition === 'function') {
+                return upgrade.condition(this.stats);
+            }
+            return true;
+        });
+
+        const selections = [];
+        // 建立一個臨時池副本，避免重複抽選
+        let tempPool = [...availablePool];
+
+        // 抽取的數量不能超過可用池的大小
+        const actualCount = Math.min(count, tempPool.length);
+
+        for (let i = 0; i < actualCount; i++) {
+            // 2. 計算目前臨時池的總權重
+            const totalWeight = tempPool.reduce((sum, upgrade) => sum + upgrade.rarity.weight, 0);
+
+            // 3. 產生隨機數
+            let random = Math.random() * totalWeight;
+
+            // 4. 根據權重區間找出技能
+            for (let j = 0; j < tempPool.length; j++) {
+                const upgrade = tempPool[j];
+                if (random < upgrade.rarity.weight) {
+                    selections.push(upgrade);
+                    // 從臨時池移除已抽中的技能，確保不會抽到重複的
+                    tempPool.splice(j, 1);
+                    break;
+                }
+                random -= upgrade.rarity.weight;
+            }
+        }
+
+        return selections;
+    }
+
+    // GameEngine.js 內的 showUpgradeMenu 修正
+    showUpgradeMenu() {
+        this.isSelectingUpgrade = true;
+
+        // 直接呼叫你寫好的 getRandomUpgrades(count)
+        // 它已經包含了：1. Condition 過濾, 2. 權重計算, 3. 不重複抽取
+        this.upgradeOptions = this.getRandomUpgrades(3);
+
+        // 防呆檢查：如果池子太空抽不出東西
+        if (this.upgradeOptions.length === 0) {
+            console.warn("警告：升級池中沒有符合條件的技能！");
+            this.isSelectingUpgrade = false;
+        }
+    }
+    applyUpgrade(index) {
+        const selected = this.upgradeOptions[index];
+        selected.action(this.stats);
+
+        // --- 新增：玩家頭上跳字 ---
+        // 將十六進位顏色轉換為 rgba 格式 (簡單處理可用 white 或從 rarity 提取)
+        const color = selected.rarity.color;
+        this.player.addFloatingText(`★ ${selected.name} UP!`, "255, 215, 0");
+
+        this.isSelectingUpgrade = false;
+        this.upgradeOptions = [];
+        this.uiManager.hoverIndex = -1; // 記得重設懸停索引
+    }
+
+
+    // 在 GameEngine 類別內新增此方法
+    handleEnemyDeath(enemy, bullet = null) {
+        if (enemy.isDead) return;
+
+        // 1. 觸發死亡視覺效果
+        EffectManager.createDeathEffect(this.particles, enemy.centerX, enemy.centerY);
+        this.camera.shake(8, 5);
+        this.freezeTimer = 1;
+
+        // 2. 敵人死亡邏輯 (帶入擊殺方向)
+        const dx = bullet ? bullet.dx : 0;
+        const dy = bullet ? bullet.dy : 0;
+        enemy.die(dx, dy);
+
+        // 3. 獎勵邏輯
+        if (enemy.isElite) {
+            // 1. 金色特效文字
+            this.player.addFloatingText("★ ELITE ELIMINATED ★", "255, 215, 0");
+
+            // 2. 噴出更多金色的粒子 (可選)
+            for (let i = 0; i < 20; i++) {
+                EffectManager.createHitEffect(this.particles, enemy.centerX, enemy.centerY, "#FFD700");
+            }
+
+            // 3. 獎勵
+            this.score += 150;
+            this.stats.gainExp(100);
+            this.camera.shake(25, 12); // 強烈震動
+        } else {
+            // 普通怪獎勵
+            this.score += 10;
+            if (this.stats.gainExp(20)) {
+                this.showUpgradeMenu();
+            }
+        }
+    }
+    // game.js 內部修改
+    handlePlayerDamage(amount) {
+        // 呼叫 player 的受傷方法（這會處理無敵時間與彈開）
+        const success = this.player.takeDamage(amount);
+
+        if (success) {
+            // 同步血量給 stats (如果你希望 UI 繼續讀取 stats.hp)
+            this.stats.hp = this.player.hp;
+
+            EffectManager.triggerDamageFlash();
+            this.camera.shake(10, 5);
+            this.player.addFloatingText(`-${amount}`, "255, 0, 0");
+
+            if (this.player.hp <= 0) {
+                this.gameOver();
+            }
+        }
+    }
+    gameOver() {
+        this.isGameOver = true;
+        // 震動一下強調死亡感
+        this.camera.shake(20, 15);
+    }
 }
 
 new GameEngine();
+
+class SimpleExplosion {
+    constructor(x, y, radius) {
+        this.x = x;
+        this.y = y;
+        this.radius = radius;
+        this.life = 1.0; // 生命值從 1.0 降到 0
+    }
+    update() {
+        this.life -= 0.05; // 消失速度
+    }
+    draw(ctx) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius * (1 - this.life * 0.5), 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 100, 0, ${this.life})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+}
