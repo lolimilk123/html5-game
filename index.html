@@ -32,7 +32,23 @@
 </head>
 <body>
     <div class="info">WASD 移動 | 滑鼠點擊 射擊</div>
+<div id="game-container" style="position: relative; width: 800px; height: 600px;">
     <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="version-tag">v1.2.5</div>
+</div>
+
+<style>
+    #version-tag {
+        position: absolute;
+        bottom: 5px;
+        right: 10px;
+        color: rgba(255, 255, 255, 0.4); /* 半透明灰白色 */
+        font-family: Arial, sans-serif;
+        font-size: 12px;
+        pointer-events: none; /* 讓滑鼠點擊穿透，不干擾遊戲 */
+        user-select: none;    /* 防止文字被選取 */
+    }
+</style>
 <script type="module" src="game.js"></script>
 </body>
 </html>
